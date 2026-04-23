@@ -5,7 +5,6 @@
 'use strict';
 
 // ── Config ─────────────────────────────────────────────────────
-const API_URL = 'http://localhost:5000/api';
 
 // ── State ──────────────────────────────────────────────────────
 let token             = localStorage.getItem('token');
