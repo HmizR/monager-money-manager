@@ -570,8 +570,22 @@ tbody tr:hover td { background: var(--surface2); }
 .amount-expense { color: var(--red); font-weight: 700; }
 
 /* ── Chart ──────────────────────────────────────────────────── */
-.chart-container { position: relative; }
-.chart-container canvas { max-width: 100%; }
+.chart-container {
+  position: relative;
+  min-height: 300px;
+  width: 100%;
+}
+.chart-container canvas {
+  max-width: 100%;
+}
+.chart-container.chart-doughnut {
+  min-height: 280px;
+  max-width: 320px;
+  margin: 0 auto;
+}
+.chart-container.chart-line {
+  min-height: 300px;
+}
 
 /* ── Progress ───────────────────────────────────────────────── */
 .budget-item { margin-bottom: 18px; }
@@ -763,6 +777,12 @@ tbody tr:hover td { background: var(--surface2); }
   .export-btns { flex-direction: column; }
   .forecast-grid { grid-template-columns: repeat(2, 1fr); }
   .projection-grid { grid-template-columns: 1fr 1fr; }
+
+  /* Charts: stack vertically, with adequate height */
+  .charts-row { grid-template-columns: 1fr !important; }
+  .chart-container { min-height: 260px; }
+  .chart-container.chart-doughnut { min-height: 240px; max-width: 100%; }
+  .chart-container.chart-line { min-height: 260px; }
 }
 
 @media (max-width: 480px) {

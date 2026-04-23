@@ -199,18 +199,18 @@
         </div>
 
         <!-- Charts row -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+        <div class="charts-row" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
           <div class="section">
             <div class="section-header">
               <div class="section-title"><i class="fas fa-chart-pie"></i>Spending by Category</div>
             </div>
-            <div class="chart-container"><canvas id="categoryChart"></canvas></div>
+            <div class="chart-container chart-doughnut"><canvas id="categoryChart"></canvas></div>
           </div>
           <div class="section">
             <div class="section-header">
               <div class="section-title"><i class="fas fa-chart-line"></i>Monthly Trend</div>
             </div>
-            <div class="chart-container"><canvas id="trendChart"></canvas></div>
+            <div class="chart-container chart-line"><canvas id="trendChart"></canvas></div>
           </div>
         </div>
 
@@ -219,7 +219,7 @@
           <div class="section-header">
             <div class="section-title"><i class="fas fa-chart-area"></i>Balance Trend</div>
           </div>
-          <div class="chart-container"><canvas id="balanceTrendChart"></canvas></div>
+          <div class="chart-container chart-line"><canvas id="balanceTrendChart"></canvas></div>
         </div>
 
         <!-- Balance Forecast -->

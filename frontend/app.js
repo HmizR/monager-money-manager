@@ -179,9 +179,13 @@ async function loadTrendChart() {
         ]
       },
       options: {
-        responsive: true, maintainAspectRatio: true,
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: Rp ${ctx.parsed.y.toLocaleString()}` } } },
-        scales: { x: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } }, y: { ticks: { color: '#64748b', callback: v => 'Rp ' + v.toLocaleString() }, grid: { color: 'rgba(255,255,255,0.04)' } } }
+        scales: {
+          x: { ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 30 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+          y: { ticks: { color: '#64748b', callback: v => 'Rp ' + (v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v.toLocaleString()) }, grid: { color: 'rgba(255,255,255,0.04)' } }
+        }
       }
     });
   } catch (err) { console.error(err); }
@@ -200,8 +204,14 @@ async function loadCategoryChart() {
         datasets: [{ data: data.data, backgroundColor: ['#00e5a0','#60a5fa','#f59e0b','#ff5370','#a78bfa','#fb923c','#34d399','#f472b6'], borderWidth: 0, hoverOffset: 8 }]
       },
       options: {
-        responsive: true, maintainAspectRatio: true, cutout: '60%',
-        plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.label}: Rp ${ctx.parsed.toLocaleString()}` } } }
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '60%',
+        plugins: {
+          ...chartDefaults.plugins,
+          legend: { position: 'bottom', labels: { color: '#94a3b8', font: { family: 'DM Sans', size: 12 }, padding: 12, boxWidth: 12 } },
+          tooltip: { callbacks: { label: ctx => `${ctx.label}: Rp ${ctx.parsed.toLocaleString()}` } }
+        }
       }
     });
   } catch (err) { console.error(err); }
@@ -224,10 +234,14 @@ async function loadBalanceTrend() {
         ]
       },
       options: {
-        responsive: true, maintainAspectRatio: true,
+        responsive: true,
+        maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: Rp ${ctx.parsed.y.toLocaleString()}` } } },
-        scales: { x: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.04)' } }, y: { ticks: { color: '#64748b', callback: v => 'Rp ' + v.toLocaleString() }, grid: { color: 'rgba(255,255,255,0.04)' } } }
+        scales: {
+          x: { ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 30 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+          y: { ticks: { color: '#64748b', callback: v => 'Rp ' + (v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v.toLocaleString()) }, grid: { color: 'rgba(255,255,255,0.04)' } }
+        }
       }
     });
   } catch (err) { console.error(err); }
