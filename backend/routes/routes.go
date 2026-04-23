@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"money-manager/config"
     "money-manager/controllers"
     "money-manager/middleware"
     "github.com/gin-contrib/cors"
@@ -12,7 +13,7 @@ func SetupRouter() *gin.Engine {
     
     // CORS configuration
     router.Use(cors.New(cors.Config{
-        AllowOrigins:     []string{"http://localhost:3000", "http://localhost:8085"},
+        AllowOrigins:     config.AppConfig.CorsOrigins,
         AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
         AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
         ExposeHeaders:    []string{"Content-Length"},

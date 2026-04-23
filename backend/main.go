@@ -19,8 +19,9 @@ func main() {
     router := routes.SetupRouter()
     
     // Start server
-    log.Println("Server starting on :5000")
-    if err := router.Run(":5000"); err != nil {
+	serverAddr := ":" + config.AppConfig.ServerPort
+    log.Printf("Server starting on %s", serverAddr)
+    if err := router.Run(serverAddr); err != nil {
         log.Fatal("Failed to start server:", err)
     }
 }
