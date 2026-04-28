@@ -192,7 +192,7 @@ async function loadTrendChart() {
 
 async function loadCategoryChart() {
   try {
-    const res  = await fetch(`${API_URL}/charts?type=category`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/charts?type=category&range=${globalRange}`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     if (categoryChart) categoryChart.destroy();
     const ctx = document.getElementById('categoryChart').getContext('2d');
