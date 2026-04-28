@@ -7,7 +7,6 @@
 // ── Config ─────────────────────────────────────────────────────
 
 // ── State ──────────────────────────────────────────────────────
-let token             = localStorage.getItem('token');
 let categoryChart     = null;
 let trendChart        = null;
 let balanceTrendChart = null;
@@ -32,12 +31,15 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
   const username = document.getElementById('loginUsername').value;
   const password = document.getElementById('loginPassword').value;
   try {
-    const res  = await fetch(`${API_URL}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const res  = await fetch(`${API_URL}/auth/login`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ username, password }), 
+        credentials: 'include'
+    });
     const data = await res.json();
     if (res.ok) {
-      localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      token = data.token;
       showDashboard();
       loadDashboard();
     } else { toast(data.error || 'Login failed', 'error'); }
@@ -51,12 +53,15 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
   const email    = document.getElementById('regEmail').value;
   const password = document.getElementById('regPassword').value;
   try {
-    const res  = await fetch(`${API_URL}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, email, password }) });
+    const res  = await fetch(`${API_URL}/auth/register`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ username, email, password }),
+        credentials: 'include'
+    });
     const data = await res.json();
     if (res.ok) {
-      localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      token = data.token;
       showDashboard();
       loadDashboard();
     } else { toast(data.error || 'Registration failed', 'error'); }
@@ -72,12 +77,20 @@ function showLogin() {
   document.getElementById('loginPage').style.display = 'flex';
 }
 
-function logout() {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
-  token = null;
-  document.getElementById('dashboard').style.display = 'none';
-  document.getElementById('loginPage').style.display = 'flex';
+async function logout() {
+  try {
+    const res  = await fetch(`${API_URL}/auth/logout`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        credentials: 'include'
+    });
+    const data = await res.json();
+    if (res.ok) {
+      localStorage.removeItem('user');
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('loginPage').style.display = 'flex';
+    } else { toast(data.error || 'Login failed', 'error'); }
+  } catch { toast('Connection error', 'error'); }
 }
 
 function showDashboard() {
@@ -134,7 +147,7 @@ async function loadDashboard() {
     await loadCategories();
 
     // Stats with range
-    const statsRes  = await fetch(`${API_URL}/statistics?range=${globalRange}`, { headers: { Authorization: `Bearer ${token}` } });
+    const statsRes  = await fetch(`${API_URL}/statistics?range=${globalRange}`, { credentials: 'include' });
     const stats     = await statsRes.json();
     const net = (stats.total_income || 0) - (stats.total_expense || 0);
     const netClass  = net >= 0 ? 'netchange' : 'expense';
@@ -144,7 +157,7 @@ async function loadDashboard() {
     document.getElementById('statNet').textContent     = `Rp ${net.toLocaleString()}`;
 
     // Current balance
-    const balRes  = await fetch(`${API_URL}/balance/current`, { headers: { Authorization: `Bearer ${token}` } });
+    const balRes  = await fetch(`${API_URL}/balance/current`, { credentials: 'include' });
     const balData = await balRes.json();
     document.getElementById('currentBalance').textContent = `Rp ${(balData.balance || 0).toLocaleString()}`;
 
@@ -164,7 +177,7 @@ const chartDefaults = {
 
 async function loadTrendChart() {
   try {
-    const res  = await fetch(`${API_URL}/charts?type=trend&range=${globalRange}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/charts?type=trend&range=${globalRange}`, { credentials: 'include' });
     const data = await res.json();
     if (trendChart) trendChart.destroy();
     const ctx = document.getElementById('trendChart').getContext('2d');
@@ -192,7 +205,7 @@ async function loadTrendChart() {
 
 async function loadCategoryChart() {
   try {
-    const res  = await fetch(`${API_URL}/charts?type=category&range=${globalRange}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/charts?type=category&range=${globalRange}`, { credentials: 'include' });
     const data = await res.json();
     if (categoryChart) categoryChart.destroy();
     const ctx = document.getElementById('categoryChart').getContext('2d');
@@ -218,7 +231,7 @@ async function loadCategoryChart() {
 
 async function loadBalanceTrend() {
   try {
-    const res  = await fetch(`${API_URL}/balance/trend?range=${globalRange}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/balance/trend?range=${globalRange}`, { credentials: 'include' });
     const data = await res.json();
     if (balanceTrendChart) balanceTrendChart.destroy();
     const ctx = document.getElementById('balanceTrendChart').getContext('2d');
@@ -249,7 +262,7 @@ async function loadBalanceTrend() {
 // ── Balance Forecast ────────────────────────────────────────────
 async function loadBalanceForecast() {
   try {
-    const res      = await fetch(`${API_URL}/balance/forecast`, { headers: { Authorization: `Bearer ${token}` } });
+    const res      = await fetch(`${API_URL}/balance/forecast`, { credentials: 'include' });
     const forecast = await res.json();
 
     document.getElementById('forecastCards').innerHTML = `
@@ -291,7 +304,7 @@ async function loadBalanceForecast() {
 // ── Monthly Projection ──────────────────────────────────────────
 async function loadMonthlyProjection() {
   try {
-    const res        = await fetch(`${API_URL}/balance/projection`, { headers: { Authorization: `Bearer ${token}` } });
+    const res        = await fetch(`${API_URL}/balance/projection`, { credentials: 'include' });
     const projection = await res.json();
     const endBal     = projection.projected_ending_balance || 0;
     const isPos      = endBal >= 0;
@@ -348,7 +361,7 @@ async function loadMonthlyProjection() {
 // ── Categories ──────────────────────────────────────────────────
 async function loadCategories() {
   try {
-    const res  = await fetch(`${API_URL}/categories`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/categories`, { credentials: 'include' });
     const data = await res.json();
     allCategories = data.categories || [];
   } catch {
@@ -400,7 +413,7 @@ async function addNewCategory() {
 // ── Transactions ────────────────────────────────────────────────
 async function loadTransactions() {
   try {
-    const res  = await fetch(`${API_URL}/transactions`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/transactions`, { credentials: 'include' });
     const data = await res.json();
     const tbody = document.getElementById('transactionsList');
     tbody.innerHTML = '';
@@ -433,7 +446,12 @@ async function addTransaction() {
   if (!amount || !category || !date) { toast('Please fill all required fields', 'error'); return; }
   if (!allCategories.includes(category)) { allCategories.push(category); allCategories.sort(); updateCategoryDropdowns(); }
   try {
-    const res = await fetch(`${API_URL}/transactions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ amount: parseFloat(amount), type, category, description, transaction_date: date }) });
+    const res = await fetch(`${API_URL}/transactions`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ amount: parseFloat(amount), type, category, description, transaction_date: date }),
+        credentials: 'include'
+    });
     if (res.ok) {
       toast('Transaction added successfully');
       clearTransactionForm();
@@ -449,7 +467,7 @@ async function addTransaction() {
 async function deleteTransaction(uuid) {
   if (!confirm('Delete this transaction?')) return;
   try {
-    const res = await fetch(`${API_URL}/transactions/${uuid}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${API_URL}/transactions/${uuid}`, { method: 'DELETE', credentials: 'include' });
     if (res.ok) { toast('Transaction deleted'); loadTransactions(); }
   } catch { toast('Error deleting transaction', 'error'); }
 }
@@ -468,7 +486,11 @@ async function setBudget() {
   if (!category || !amount || !month || !year) { toast('Please fill all fields', 'error'); return; }
   if (!allCategories.includes(category)) { allCategories.push(category); allCategories.sort(); updateCategoryDropdowns(); }
   try {
-    const res = await fetch(`${API_URL}/budgets`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ category, amount: parseFloat(amount), month: parseInt(month), year: parseInt(year) }) });
+    const res = await fetch(`${API_URL}/budgets`, { method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ category, amount: parseFloat(amount), month: parseInt(month), year: parseInt(year) }),
+        credentials: 'include'
+    });
     if (res.ok) { toast('Budget set successfully'); loadBudgets(); clearBudgetForm(); }
     else { const d = await res.json(); toast(d.error || 'Failed to set budget', 'error'); }
   } catch { toast('Error setting budget', 'error'); }
@@ -477,7 +499,7 @@ async function setBudget() {
 async function deleteBudget(uuid) {
   if (!confirm('Delete this budget?')) return;
   try {
-    const res = await fetch(`${API_URL}/budgets/${uuid}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${API_URL}/budgets/${uuid}`, { method: 'DELETE', credentials: 'include' });
     if (res.ok) { toast('Budget deleted'); loadBudgets(); }
     else { const d = await res.json(); toast(d.error || 'Failed to delete', 'error'); }
   } catch { toast('Error deleting budget', 'error'); }
@@ -511,7 +533,11 @@ async function updateBudget(uuid) {
   const year     = document.getElementById('budgetYear').value;
   if (!category || !amount || !month || !year) { toast('Please fill all fields', 'error'); return; }
   try {
-    const res = await fetch(`${API_URL}/budgets/${uuid}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ category, amount: parseFloat(amount), month: parseInt(month), year: parseInt(year) }) });
+    const res = await fetch(`${API_URL}/budgets/${uuid}`, { 
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ category, amount: parseFloat(amount), month: parseInt(month), year: parseInt(year) }),
+        credentials: 'include'
+    });
     if (res.ok) {
       toast('Budget updated');
       if (window.editingBudgetOldCategory !== category) await loadCategories();
@@ -538,7 +564,7 @@ function clearBudgetForm() {
 async function loadBudgets() {
   try {
     const now   = new Date();
-    const res   = await fetch(`${API_URL}/budgets?month=${now.getMonth()+1}&year=${now.getFullYear()}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res   = await fetch(`${API_URL}/budgets?month=${now.getMonth()+1}&year=${now.getFullYear()}`, { credentials: 'include' });
     const data  = await res.json();
     const div   = document.getElementById('budgetsList');
     div.innerHTML = '';
@@ -580,14 +606,14 @@ async function loadBudgets() {
 // ── Recommendations ─────────────────────────────────────────────
 async function generateRecommendations() {
   try {
-    const res = await fetch(`${API_URL}/recommendations/generate`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${API_URL}/recommendations/generate`, { method: 'POST', credentials: 'include' });
     if (res.ok) { toast('Recommendations generated'); loadRecommendations(); }
   } catch { toast('Error generating recommendations', 'error'); }
 }
 
 async function loadRecommendations() {
   try {
-    const res  = await fetch(`${API_URL}/recommendations`, { headers: { Authorization: `Bearer ${token}` } });
+    const res  = await fetch(`${API_URL}/recommendations`, { credentials: 'include' });
     const data = await res.json();
     const div  = document.getElementById('recommendationsList');
     div.innerHTML = '';
@@ -610,7 +636,7 @@ async function loadRecommendations() {
 
 // ── Export / Import ─────────────────────────────────────────────
 function exportData(format) {
-  window.open(`${API_URL}/export?format=${format}&token=${token}`, '_blank');
+  window.open(`${API_URL}/export?format=${format}`, '_blank');
 }
 
 async function importData() {
@@ -620,15 +646,24 @@ async function importData() {
   const formData  = new FormData();
   formData.append('file', file);
   try {
-    const res  = await fetch(`${API_URL}/import`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
+    const res  = await fetch(`${API_URL}/import`, { method: 'POST', credentials: 'include', body: formData });
     const data = await res.json();
     if (res.ok) { toast(`Successfully imported ${data.count} transactions`); loadTransactions(); }
     else toast(data.error || 'Import failed', 'error');
   } catch { toast('Import error', 'error'); }
 }
 
-// ── Init ────────────────────────────────────────────────────────
-if (token) {
-  showDashboard();
-  loadDashboard();
+async function checkAuth() {
+  try {
+    const statsRes  = await fetch(`${API_URL}/balance/current`, { credentials: 'include' });
+    if (statsRes.ok) {
+        showDashboard();
+        loadDashboard();
+    }
+  } catch (err) {
+    toast('Check auth Error', 'error');
+  }
 }
+
+// ── Init ────────────────────────────────────────────────────────
+checkAuth();
