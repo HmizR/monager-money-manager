@@ -54,9 +54,18 @@ func Register(c *gin.Context) {
         return
     }
 
+	c.SetCookie(
+        "auth_token",     // name
+        token,            // value
+        3600*24,          // maxAge (24 jam) - sesuaikan dengan expiry token Anda
+        "/",              // path
+        "",               // domain (kosong = current domain)
+        true,            // secure (set true jika pakai HTTPS)
+        true,             // httpOnly
+    )
+
     c.JSON(http.StatusCreated, gin.H{
         "message": "User registered successfully",
-        "token":   token,
         "user": gin.H{
             "id":       userID,
             "username": req.Username,
@@ -104,13 +113,12 @@ func Login(c *gin.Context) {
         3600*24,          // maxAge (24 jam) - sesuaikan dengan expiry token Anda
         "/",              // path
         "",               // domain (kosong = current domain)
-        false,            // secure (set true jika pakai HTTPS)
+        true,            // secure (set true jika pakai HTTPS)
         true,             // httpOnly
     )
 
     c.JSON(http.StatusOK, gin.H{
         "message": "Login successful",
-        "token":   token,
         "user": gin.H{
             "id":       user.ID,
             "username": user.Username,
@@ -128,7 +136,7 @@ func Logout(c *gin.Context) {
         -1,          // expired
         "/",
         "",
-        false,
+        true,
         true,
     )
     
