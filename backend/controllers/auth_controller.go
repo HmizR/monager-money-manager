@@ -97,6 +97,17 @@ func Login(c *gin.Context) {
         return
     }
 
+	c.SetSameSite(http.SameSiteStrictMode)
+    c.SetCookie(
+        "auth_token",     // name
+        token,            // value
+        3600*24,          // maxAge (24 jam) - sesuaikan dengan expiry token Anda
+        "/",              // path
+        "",               // domain (kosong = current domain)
+        false,            // secure (set true jika pakai HTTPS)
+        true,             // httpOnly
+    )
+
     c.JSON(http.StatusOK, gin.H{
         "message": "Login successful",
         "token":   token,
@@ -105,5 +116,23 @@ func Login(c *gin.Context) {
             "username": user.Username,
             "email":    user.Email,
         },
+    })
+}
+
+func Logout(c *gin.Context) {
+    // Hapus cookie dengan set maxAge = -1
+    c.SetSameSite(http.SameSiteStrictMode)
+    c.SetCookie(
+        "auth_token",
+        "",
+        -1,          // expired
+        "/",
+        "",
+        false,
+        true,
+    )
+    
+    c.JSON(http.StatusOK, gin.H{
+        "message": "Logout successful",
     })
 }

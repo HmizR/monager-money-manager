@@ -11,7 +11,13 @@ func AuthMiddleware() gin.HandlerFunc {
     return func(c *gin.Context) {
         var tokenString string
         
-        // Cek dari header Authorization dulu
+		// PRIORITAS 1: Cek dari HttpOnly Cookie (paling aman)
+        cookieToken, err := c.Cookie("auth_token")
+        if err == nil && cookieToken != "" {
+            tokenString = cookieToken
+        }
+        
+        // PRIORITAS 2: Fallback ke Authorization header
         authHeader := c.GetHeader("Authorization")
         if authHeader != "" {
             parts := strings.Split(authHeader, " ")

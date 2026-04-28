@@ -25,6 +25,7 @@ func SetupRouter() *gin.Engine {
     {
         auth.POST("/register", controllers.Register)
         auth.POST("/login", controllers.Login)
+		auth.POST("/logout", controllers.Logout)
     }
     
     // Protected routes
