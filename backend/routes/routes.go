@@ -32,6 +32,15 @@ func SetupRouter() *gin.Engine {
     api := router.Group("/api")
     api.Use(middleware.AuthMiddleware())
     {
+        // Account routes
+        api.POST("/accounts", controllers.CreateAccount)
+        api.GET("/accounts", controllers.GetAccounts)
+        api.DELETE("/accounts/:uuid", controllers.DeleteAccount)
+
+        // Transfer routes
+        api.POST("/transfers", controllers.CreateTransfer)
+        api.DELETE("/transfers/:transfer_uuid", controllers.DeleteTransfer)
+
         // Transaction routes
         api.POST("/transactions", controllers.CreateTransaction)
         api.GET("/transactions", controllers.GetTransactions)
