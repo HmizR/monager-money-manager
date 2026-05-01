@@ -48,6 +48,13 @@ func Register(c *gin.Context) {
     }
 
     userID, _ := result.LastInsertId()
+
+    // Create a default account so the app can support multiple accounts seamlessly.
+    _, _ = database.DB.Exec(
+        `INSERT INTO accounts (uuid, user_id, name, type, currency_code) VALUES (?, ?, 'Cash', 'cash', 'IDR')`,
+        models.GenerateUUID(), userID,
+    )
+
     token, err := utils.GenerateToken(int(userID), req.Username)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})

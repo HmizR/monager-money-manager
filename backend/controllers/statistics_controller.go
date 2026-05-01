@@ -28,7 +28,7 @@ func GetCurrentBalance(c *gin.Context) {
 
 	var balance float64
 	query := `SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) 
-              FROM transactions WHERE user_id = ?`
+              FROM transactions WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL)`
 
 	database.DB.QueryRow(query, userID).Scan(&balance)
 
@@ -81,7 +81,7 @@ func GetStatistics(c *gin.Context) {
                 SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income,
                 SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expense
               FROM transactions 
-              WHERE user_id = ? AND transaction_date BETWEEN ? AND ?`
+              WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?`
 
 	err := database.DB.QueryRow(query, userID, startDate, endDate).Scan(&stats.TotalIncome, &stats.TotalExpense)
 	if err != nil && err != sql.ErrNoRows {
@@ -94,7 +94,7 @@ func GetStatistics(c *gin.Context) {
 	// Get category spending
 	categoryQuery := `SELECT category, SUM(amount) as total 
                       FROM transactions 
-                      WHERE user_id = ? AND type = 'expense' AND transaction_date BETWEEN ? AND ?
+                      WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND type = 'expense' AND transaction_date BETWEEN ? AND ?
                       GROUP BY category`
 
 	rows, err := database.DB.Query(categoryQuery, userID, startDate, endDate)
@@ -118,7 +118,7 @@ func GetStatistics(c *gin.Context) {
                         SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
                         SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
                      FROM transactions 
-                     WHERE user_id = ? AND transaction_date BETWEEN ? AND ?
+                     WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
                      GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
                      ORDER BY month ASC`
 
@@ -176,7 +176,7 @@ func getCategoryChartData(c *gin.Context, userID int, rangeType string) {
 
 	query := `SELECT category, SUM(amount) as total 
               FROM transactions 
-              WHERE user_id = ? AND type = 'expense' AND transaction_date BETWEEN ? AND ?
+              WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND type = 'expense' AND transaction_date BETWEEN ? AND ?
               GROUP BY category`
 
 	rows, err := database.DB.Query(query, userID, startDate, endDate)
@@ -238,7 +238,7 @@ func getTrendChartDataWithRange(c *gin.Context, userID int, rangeType string) {
                     SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
                     SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
                  FROM transactions 
-                 WHERE user_id = ? AND transaction_date BETWEEN ? AND ?
+                 WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
                  GROUP BY DATE(transaction_date)
                  ORDER BY period ASC`
 
@@ -249,7 +249,7 @@ func getTrendChartDataWithRange(c *gin.Context, userID int, rangeType string) {
                     SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
                     SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
                  FROM transactions 
-                 WHERE user_id = ? AND transaction_date BETWEEN ? AND ?
+                 WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
                  GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
                  ORDER BY period ASC`
 
