@@ -1,6 +1,7 @@
 package controllers
 
 import (
+    "database/sql"
     "net/http"
     "time"
     "money-manager/database"
@@ -23,11 +24,35 @@ func CreateTransaction(c *gin.Context) {
         return
     }
 
+    var accountID int
+    var currencyCode string
+    if req.AccountUUID != "" {
+        accountID, currencyCode, err = getAccountByUUID(userID, req.AccountUUID)
+        if err == sql.ErrNoRows {
+            c.JSON(http.StatusNotFound, gin.H{"error": "Account not found"})
+            return
+        }
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+            return
+        }
+    } else {
+        accountID, _, currencyCode, err = getDefaultAccount(userID)
+        if err == sql.ErrNoRows {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "No accounts found; create an account first"})
+            return
+        }
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+            return
+        }
+    }
+
     transactionUUID := models.GenerateUUID()
-    query := `INSERT INTO transactions (uuid, user_id, amount, type, category, description, transaction_date) 
-              VALUES (?, ?, ?, ?, ?, ?, ?)`
+    query := `INSERT INTO transactions (uuid, user_id, account_id, currency_code, amount, type, category, description, transaction_date) 
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     
-    _, err = database.DB.Exec(query, transactionUUID, userID, req.Amount, req.Type, 
+    _, err = database.DB.Exec(query, transactionUUID, userID, accountID, currencyCode, req.Amount, req.Type, 
         req.Category, req.Description, transactionDate)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create transaction"})
@@ -45,28 +70,36 @@ func GetTransactions(c *gin.Context) {
     endDate := c.Query("end_date")
     category := c.Query("category")
     transactionType := c.Query("type")
+    accountUUID := c.Query("account_uuid")
     
-    query := "SELECT uuid, amount, type, category, description, transaction_date, created_at FROM transactions WHERE user_id = ?"
+    query := `SELECT t.uuid, a.uuid, t.currency_code, t.transfer_uuid, t.amount, t.type, t.category, t.description, t.transaction_date, t.created_at
+              FROM transactions t
+              LEFT JOIN accounts a ON a.id = t.account_id
+              WHERE t.user_id = ?`
     args := []interface{}{userID}
     
     if startDate != "" {
-        query += " AND transaction_date >= ?"
+        query += " AND t.transaction_date >= ?"
         args = append(args, startDate)
     }
     if endDate != "" {
-        query += " AND transaction_date <= ?"
+        query += " AND t.transaction_date <= ?"
         args = append(args, endDate)
     }
     if category != "" {
-        query += " AND category = ?"
+        query += " AND t.category = ?"
         args = append(args, category)
     }
     if transactionType != "" {
-        query += " AND type = ?"
+        query += " AND t.type = ?"
         args = append(args, transactionType)
     }
+    if accountUUID != "" {
+        query += " AND a.uuid = ?"
+        args = append(args, accountUUID)
+    }
     
-    query += " ORDER BY transaction_date DESC"
+    query += " ORDER BY t.transaction_date DESC"
     
     rows, err := database.DB.Query(query, args...)
     if err != nil {
@@ -76,14 +109,38 @@ func GetTransactions(c *gin.Context) {
     defer rows.Close()
     
     var transactions []models.Transaction
+    rowIdx := 0
     for rows.Next() {
         var t models.Transaction
-        err := rows.Scan(&t.UUID, &t.Amount, &t.Type, &t.Category, &t.Description, &t.TransactionDate, &t.CreatedAt)
+        var accountUUIDNS sql.NullString
+        var currencyCodeNS sql.NullString
+        var transferUUIDNS sql.NullString
+        err := rows.Scan(&t.UUID, &accountUUIDNS, &currencyCodeNS, &transferUUIDNS, &t.Amount, &t.Type, &t.Category, &t.Description, &t.TransactionDate, &t.CreatedAt)
         if err != nil {
             c.JSON(http.StatusInternalServerError, gin.H{"error": "Error scanning data"})
             return
         }
+        if accountUUIDNS.Valid {
+            t.AccountUUID = accountUUIDNS.String
+        } else {
+            t.AccountUUID = ""
+        }
+        if currencyCodeNS.Valid {
+            t.CurrencyCode = currencyCodeNS.String
+        } else {
+            t.CurrencyCode = ""
+        }
+        if transferUUIDNS.Valid {
+            t.TransferUUID = transferUUIDNS.String
+        } else {
+            t.TransferUUID = ""
+        }
         transactions = append(transactions, t)
+        rowIdx++
+    }
+    if rerr := rows.Err(); rerr != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch transactions"})
+        return
     }
     
     c.JSON(http.StatusOK, gin.H{"transactions": transactions})
@@ -104,11 +161,31 @@ func UpdateTransaction(c *gin.Context) {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid date format"})
         return
     }
+
+    // Optional: move transaction to another account
+    var accountID any = nil
+    var currencyCode any = nil
+    if req.AccountUUID != "" {
+        id, cur, err := getAccountByUUID(userID, req.AccountUUID)
+        if err == sql.ErrNoRows {
+            c.JSON(http.StatusNotFound, gin.H{"error": "Account not found"})
+            return
+        }
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+            return
+        }
+        accountID = id
+        currencyCode = cur
+    }
     
-    query := `UPDATE transactions SET amount = ?, type = ?, category = ?, description = ?, transaction_date = ? 
-              WHERE uuid = ? AND user_id = ?`
+    query := `UPDATE transactions
+              SET amount = ?, type = ?, category = ?, description = ?, transaction_date = ?,
+                  account_id = COALESCE(?, account_id),
+                  currency_code = COALESCE(?, currency_code)
+              WHERE uuid = ? AND user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL)`
     
-    result, err := database.DB.Exec(query, req.Amount, req.Type, req.Category, req.Description, transactionDate, transactionUUID, userID)
+    result, err := database.DB.Exec(query, req.Amount, req.Type, req.Category, req.Description, transactionDate, accountID, currencyCode, transactionUUID, userID)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update transaction"})
         return
@@ -127,7 +204,7 @@ func DeleteTransaction(c *gin.Context) {
     userID := c.GetInt("userID")
     transactionUUID := c.Param("uuid")
     
-    result, err := database.DB.Exec("DELETE FROM transactions WHERE uuid = ? AND user_id = ?", transactionUUID, userID)
+    result, err := database.DB.Exec("DELETE FROM transactions WHERE uuid = ? AND user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL)", transactionUUID, userID)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete transaction"})
         return
