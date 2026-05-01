@@ -13,6 +13,8 @@ let balanceTrendChart = null;
 let globalRange       = '30D';
 let currentCategoryContext = null;
 let allCategories     = [];
+/** @type {Array<{uuid:string,name:string,type:string,currency_code:string}>} */
+let accountsCache     = [];
 
 // ── Utility: Toast notification ────────────────────────────────
 function toast(message, type = 'success') {
@@ -23,6 +25,238 @@ function toast(message, type = 'success') {
   el.innerHTML = `<i class="fas ${icons[type]}"></i><span>${message}</span>`;
   container.appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(20px)'; el.style.transition = '0.3s'; setTimeout(() => el.remove(), 320); }, 3000);
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function formatMoney(amount, currencyCode = 'IDR') {
+  const code = (currencyCode || 'IDR').toUpperCase();
+  try {
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: code, maximumFractionDigits: 2 }).format(Number(amount) || 0);
+  } catch {
+    return `${code} ${(Number(amount) || 0).toLocaleString('id-ID')}`;
+  }
+}
+
+function accountDisplayName(uuid) {
+  if (!uuid) return '—';
+  const a = accountsCache.find(x => x.uuid === uuid);
+  return a ? a.name : uuid.slice(0, 8) + '…';
+}
+
+function accountTypeIconClass(type) {
+  if (type === 'bank') return ['fa-university', 'bank'];
+  if (type === 'ewallet') return ['fa-mobile-screen-button', 'ewallet'];
+  return ['fa-money-bill-wave', 'cash'];
+}
+
+function setDateInputIfEmpty(id) {
+  const el = document.getElementById(id);
+  if (!el || el.value) return;
+  const d = new Date();
+  el.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function fillAccountSelectsFromCache() {
+  const preserve = {
+    txnAccountSelect: document.getElementById('txnAccountSelect')?.value,
+    txnAccountFilter: document.getElementById('txnAccountFilter')?.value,
+    transferFrom: document.getElementById('transferFrom')?.value,
+    transferTo: document.getElementById('transferTo')?.value,
+  };
+
+  const selTxn = document.getElementById('txnAccountSelect');
+  if (selTxn) {
+    selTxn.innerHTML = '<option value="">Default (first account)</option>';
+    accountsCache.forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.uuid;
+      o.textContent = `${a.name} (${a.currency_code})`;
+      selTxn.appendChild(o);
+    });
+    if (preserve.txnAccountSelect && [...selTxn.options].some(o => o.value === preserve.txnAccountSelect)) selTxn.value = preserve.txnAccountSelect;
+  }
+
+  const fil = document.getElementById('txnAccountFilter');
+  if (fil) {
+    fil.innerHTML = '<option value="">All accounts</option>';
+    accountsCache.forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.uuid;
+      o.textContent = `${a.name} (${a.currency_code})`;
+      fil.appendChild(o);
+    });
+    if (preserve.txnAccountFilter && [...fil.options].some(o => o.value === preserve.txnAccountFilter)) fil.value = preserve.txnAccountFilter;
+  }
+
+  ['transferFrom', 'transferTo'].forEach(id => {
+    const s = document.getElementById(id);
+    if (!s) return;
+    s.innerHTML = '';
+    if (!accountsCache.length) {
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = 'No accounts';
+      s.appendChild(o);
+      return;
+    }
+    accountsCache.forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.uuid;
+      o.textContent = `${a.name} (${a.currency_code})`;
+      s.appendChild(o);
+    });
+    const prev = preserve[id];
+    if (prev && [...s.options].some(o => o.value === prev)) s.value = prev;
+  });
+}
+
+async function loadAccounts() {
+  try {
+    const res = await fetch(`${API_URL}/accounts`, { credentials: 'include' });
+    const data = await res.json();
+    accountsCache = res.ok && data.accounts ? data.accounts : [];
+  } catch {
+    accountsCache = [];
+  }
+  fillAccountSelectsFromCache();
+  return accountsCache;
+}
+
+function computeBalancesPerAccount(transactions) {
+  /** @type {Record<string, { sum: number, currency: string }>} */
+  const m = {};
+  (transactions || []).forEach(t => {
+    const key = t.account_uuid || '_unset';
+    if (!m[key]) m[key] = { sum: 0, currency: (t.currency_code || 'IDR').toUpperCase() };
+    m[key].sum += t.type === 'income' ? Number(t.amount) : -Number(t.amount);
+    if (t.currency_code) m[key].currency = String(t.currency_code).toUpperCase();
+  });
+  return m;
+}
+
+async function loadAccountsPage() {
+  await loadAccounts();
+  let balances = {};
+  try {
+    const tr = await fetch(`${API_URL}/transactions`, { credentials: 'include' });
+    const td = await tr.json();
+    balances = computeBalancesPerAccount(td.transactions || []);
+  } catch (e) { console.error(e); }
+
+  const grid = document.getElementById('accountsGrid');
+  if (!grid) return;
+
+  if (!accountsCache.length) {
+    grid.innerHTML = '<div class="empty-state"><i class="fas fa-wallet"></i><p>Belum ada akun. Tambahkan akun pertama di bawah.</p></div>';
+    setDateInputIfEmpty('transferDate');
+    return;
+  }
+
+  grid.innerHTML = accountsCache.map(a => {
+    const b = balances[a.uuid] || { sum: 0, currency: a.currency_code };
+    const cur = b.currency || a.currency_code;
+    const [icon, icls] = accountTypeIconClass(a.type);
+    const typeLabel = a.type === 'ewallet' ? 'E-wallet' : a.type.charAt(0).toUpperCase() + a.type.slice(1);
+    const balStr = formatMoney(b.sum, cur);
+    const neg = b.sum < 0;
+    return `
+      <div class="account-card">
+        <div class="account-card-top">
+          <div style="display:flex;gap:12px;align-items:flex-start;min-width:0">
+            <div class="account-card-icon ${icls}"><i class="fas ${icon}"></i></div>
+            <div style="min-width:0">
+              <div class="account-card-name">${escapeHtml(a.name)}</div>
+              <div class="account-card-meta">${escapeHtml(typeLabel)} · ${escapeHtml(a.currency_code)}</div>
+            </div>
+          </div>
+        </div>
+        <div class="account-card-balance" style="color:${neg ? 'var(--red)' : 'var(--accent)'}">${balStr}</div>
+        <div class="account-card-actions">
+          <button type="button" class="btn btn-sm btn-danger" onclick="deleteAccount('${a.uuid}')" title="Hapus jika belum ada transaksi">
+            <i class="fas fa-trash"></i> Hapus
+          </button>
+        </div>
+      </div>`;
+  }).join('');
+
+  setDateInputIfEmpty('transferDate');
+}
+
+async function createAccount() {
+  const name = document.getElementById('newAccountName')?.value.trim();
+  const type = document.getElementById('newAccountType')?.value;
+  let currency = (document.getElementById('newAccountCurrency')?.value || 'IDR').trim().toUpperCase();
+  if (!name) { toast('Isi nama akun', 'error'); return; }
+  if (currency.length !== 3) { toast('Kode mata uang harus 3 huruf (mis. IDR, USD)', 'error'); return; }
+  try {
+    const res = await fetch(`${API_URL}/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, currency_code: currency }),
+      credentials: 'include',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      toast('Akun berhasil dibuat');
+      document.getElementById('newAccountName').value = '';
+      document.getElementById('newAccountCurrency').value = '';
+      await loadAccountsPage();
+    } else toast(data.error || 'Gagal membuat akun', 'error');
+  } catch { toast('Koneksi error', 'error'); }
+}
+
+async function deleteAccount(uuid) {
+  if (!confirm('Hapus akun ini? Hanya bisa jika belum ada transaksi.')) return;
+  try {
+    const res = await fetch(`${API_URL}/accounts/${uuid}`, { method: 'DELETE', credentials: 'include' });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      toast('Akun dihapus');
+      await loadAccountsPage();
+      await loadTransactions();
+    } else toast(data.error || 'Gagal menghapus', 'error');
+  } catch { toast('Koneksi error', 'error'); }
+}
+
+async function createTransfer() {
+  const from = document.getElementById('transferFrom')?.value;
+  const to = document.getElementById('transferTo')?.value;
+  const amount = parseFloat(document.getElementById('transferAmount')?.value || '');
+  const transaction_date = document.getElementById('transferDate')?.value;
+  const description = document.getElementById('transferDesc')?.value || '';
+  if (!from || !to) { toast('Pilih akun asal dan tujuan', 'error'); return; }
+  if (from === to) { toast('Akun asal dan tujuan harus berbeda', 'error'); return; }
+  if (!amount || amount <= 0) { toast('Jumlah tidak valid', 'error'); return; }
+  if (!transaction_date) { toast('Pilih tanggal', 'error'); return; }
+  try {
+    const res = await fetch(`${API_URL}/transfers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from_account_uuid: from,
+        to_account_uuid: to,
+        amount,
+        description,
+        transaction_date,
+      }),
+      credentials: 'include',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      toast('Transfer berhasil');
+      document.getElementById('transferAmount').value = '';
+      document.getElementById('transferDesc').value = '';
+      await loadAccountsPage();
+      await loadTransactions();
+      loadDashboard();
+    } else toast(data.error || 'Transfer gagal', 'error');
+  } catch { toast('Koneksi error', 'error'); }
 }
 
 // ── Auth: Login ────────────────────────────────────────────────
@@ -110,11 +344,12 @@ document.querySelectorAll('.menu-item').forEach(item => {
     document.querySelectorAll('.page-content').forEach(p => p.classList.remove('active-page'));
     const pageEl = document.getElementById(`${page}Page`);
     if (pageEl) pageEl.classList.add('active-page');
-    const titles = { dashboard: 'Dashboard', transactions: 'Transactions', budgets: 'Budgets', recommendations: 'Recommendations', export: 'Export / Import' };
+    const titles = { dashboard: 'Dashboard', transactions: 'Transactions', accounts: 'Accounts & Transfer', budgets: 'Budgets', recommendations: 'Recommendations', export: 'Export / Import' };
     document.getElementById('pageTitle').textContent = titles[page] || page;
     closeMobileSidebar();
     if (page === 'dashboard')       loadDashboard();
-    else if (page === 'transactions') { loadCategories(); loadTransactions(); }
+    else if (page === 'transactions') { loadCategories(); loadAccounts().then(() => loadTransactions()); }
+    else if (page === 'accounts')    loadAccountsPage();
     else if (page === 'budgets')      { loadCategories(); loadBudgets(); }
     else if (page === 'recommendations') loadRecommendations();
   });
@@ -413,23 +648,48 @@ async function addNewCategory() {
 // ── Transactions ────────────────────────────────────────────────
 async function loadTransactions() {
   try {
-    const res  = await fetch(`${API_URL}/transactions`, { credentials: 'include' });
+    await loadAccounts();
+    setDateInputIfEmpty('date');
+    const filter = document.getElementById('txnAccountFilter')?.value || '';
+    const url = filter
+      ? `${API_URL}/transactions?account_uuid=${encodeURIComponent(filter)}`
+      : `${API_URL}/transactions`;
+    const res  = await fetch(url, { credentials: 'include' });
     const data = await res.json();
     const tbody = document.getElementById('transactionsList');
     tbody.innerHTML = '';
     if (!data.transactions?.length) {
-      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><i class="fas fa-receipt"></i><p>No transactions yet</p></div></td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="fas fa-receipt"></i><p>Belum ada transaksi</p></div></td></tr>`;
       return;
     }
     const transactionCategories = new Set();
+    const cur = (t) => (t.currency_code || 'IDR').toUpperCase();
     data.transactions.forEach(t => {
       transactionCategories.add(t.category);
       const row = tbody.insertRow();
       row.insertCell(0).textContent = new Date(t.transaction_date).toLocaleDateString('id-ID');
-      row.insertCell(1).innerHTML = `<span class="amount-${t.type}">${t.type === 'income' ? '+' : '−'} Rp ${t.amount.toLocaleString()}</span>`;
-      row.insertCell(2).innerHTML = `<span class="badge badge-${t.type}">${t.category}</span>`;
-      row.insertCell(3).textContent = t.description || '—';
-      row.insertCell(4).innerHTML = `<button class="btn btn-sm btn-danger" onclick="deleteTransaction('${t.uuid}')"><i class="fas fa-trash"></i></button>`;
+      row.insertCell(1).textContent = accountDisplayName(t.account_uuid);
+      const amtCell = row.insertCell(2);
+      const sign = t.type === 'income' ? '+' : '−';
+      const isXfer = String(t.category).toLowerCase() === 'transfer';
+      amtCell.innerHTML = `<span class="amount-${t.type}">${sign} ${formatMoney(t.amount, cur(t))}</span>`;
+      const catCell = row.insertCell(3);
+      if (isXfer) {
+        catCell.innerHTML = `<span class="badge badge-${t.type} badge-transfer"><i class="fas fa-random" style="margin-right:4px"></i>${escapeHtml(t.category)}</span>`;
+      } else {
+        catCell.innerHTML = `<span class="badge badge-${t.type}">${escapeHtml(t.category)}</span>`;
+      }
+      row.insertCell(4).textContent = t.description || '—';
+      const act = row.insertCell(5);
+      if (isXfer) {
+        if (t.transfer_uuid) {
+          act.innerHTML = `<button class="btn btn-sm btn-danger" onclick="deleteTransfer('${t.transfer_uuid}')"><i class="fas fa-trash"></i></button>`;
+        } else {
+          act.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">—</span>';
+        }
+      } else {
+        act.innerHTML = `<button class="btn btn-sm btn-danger" onclick="deleteTransaction('${t.uuid}')"><i class="fas fa-trash"></i></button>`;
+      }
     });
     transactionCategories.forEach(cat => { if (!allCategories.includes(cat)) allCategories.push(cat); });
     allCategories.sort();
@@ -445,11 +705,14 @@ async function addTransaction() {
   const date        = document.getElementById('date').value;
   if (!amount || !category || !date) { toast('Please fill all required fields', 'error'); return; }
   if (!allCategories.includes(category)) { allCategories.push(category); allCategories.sort(); updateCategoryDropdowns(); }
+  const accountUuid = document.getElementById('txnAccountSelect')?.value || '';
+  const payload = { amount: parseFloat(amount), type, category, description, transaction_date: date };
+  if (accountUuid) payload.account_uuid = accountUuid;
   try {
     const res = await fetch(`${API_URL}/transactions`, { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ amount: parseFloat(amount), type, category, description, transaction_date: date }),
+        body: JSON.stringify(payload),
         credentials: 'include'
     });
     if (res.ok) {
@@ -462,6 +725,25 @@ async function addTransaction() {
       toast(data.error || 'Failed to add transaction', 'error');
     }
   } catch { toast('Error adding transaction', 'error'); }
+}
+
+async function deleteTransfer(transferUUID) {
+  if (!transferUUID) return;
+  if (!confirm('Hapus transfer ini? Ini akan menghapus 2 transaksi (debit dan kredit).')) return;
+  try {
+    const res = await fetch(`${API_URL}/transfers/${transferUUID}`, { method: 'DELETE', credentials: 'include' });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      toast('Transfer dihapus');
+      await loadTransactions();
+      await loadAccountsPage();
+      loadDashboard();
+    } else {
+      toast(data.error || 'Gagal menghapus transfer', 'error');
+    }
+  } catch {
+    toast('Koneksi error', 'error');
+  }
 }
 
 async function deleteTransaction(uuid) {
@@ -666,4 +948,6 @@ async function checkAuth() {
 }
 
 // ── Init ────────────────────────────────────────────────────────
+document.getElementById('txnAccountFilter')?.addEventListener('change', () => loadTransactions());
+
 checkAuth();

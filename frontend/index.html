@@ -100,6 +100,9 @@
       <div class="menu-item" data-page="transactions">
         <i class="fas fa-exchange-alt"></i><span>Transactions</span>
       </div>
+      <div class="menu-item" data-page="accounts">
+        <i class="fas fa-layer-group"></i><span>Accounts</span>
+      </div>
       <div class="menu-item" data-page="budgets">
         <i class="fas fa-wallet"></i><span>Budgets</span>
       </div>
@@ -245,7 +248,13 @@
           <div class="section-title" style="margin-bottom:16px"><i class="fas fa-plus-circle"></i>Add Transaction</div>
           <div class="form-grid">
             <div class="field-group">
-              <label>Amount (Rp)</label>
+              <label>Account</label>
+              <select id="txnAccountSelect" class="select-field">
+                <option value="">Default (first account)</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>Amount</label>
               <input type="number" id="amount" class="input-field" placeholder="0" step="0.01">
             </div>
             <div class="field-group">
@@ -284,12 +293,21 @@
         </div>
 
         <div class="section">
-          <div class="section-title" style="margin-bottom:16px"><i class="fas fa-list"></i>Transaction History</div>
+          <div class="section-header" style="margin-bottom:16px;flex-wrap:wrap;gap:12px">
+            <div class="section-title" style="margin:0"><i class="fas fa-list"></i>Transaction History</div>
+            <div class="field-group" style="min-width:200px;margin:0">
+              <label style="font-size:11px;margin-bottom:4px">Filter by account</label>
+              <select id="txnAccountFilter" class="select-field">
+                <option value="">All accounts</option>
+              </select>
+            </div>
+          </div>
           <div class="table-wrapper">
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
+                  <th>Account</th>
                   <th>Amount</th>
                   <th>Category</th>
                   <th>Description</th>
@@ -298,6 +316,78 @@
               </thead>
               <tbody id="transactionsList"></tbody>
             </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+           ACCOUNTS & TRANSFER PAGE
+      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+      <div id="accountsPage" class="page-content">
+        <div class="section">
+          <div class="section-title" style="margin-bottom:8px"><i class="fas fa-wallet"></i>Your accounts</div>
+          <p class="accounts-hint">Tunai, bank, atau e-wallet — masing-masing punya mata uang sendiri. Saldo dihitung dari semua pemasukan dan pengeluaran pada akun itu (termasuk transfer masuk/keluar).</p>
+          <div id="accountsGrid" class="accounts-grid"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" style="margin-bottom:16px"><i class="fas fa-plus-circle"></i>Add account</div>
+          <div class="form-grid">
+            <div class="field-group">
+              <label>Name</label>
+              <input type="text" id="newAccountName" class="input-field" placeholder="e.g. BCA Payroll">
+            </div>
+            <div class="field-group">
+              <label>Type</label>
+              <select id="newAccountType" class="select-field">
+                <option value="cash">Cash</option>
+                <option value="bank">Bank</option>
+                <option value="ewallet">E-wallet</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>Currency (ISO 4217)</label>
+              <input type="text" id="newAccountCurrency" class="input-field" placeholder="IDR" maxlength="3" style="text-transform:uppercase">
+            </div>
+            <div class="field-group" style="justify-content:flex-end">
+              <label>&nbsp;</label>
+              <button type="button" class="btn btn-accent" onclick="createAccount()">
+                <i class="fas fa-plus"></i> Create account
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title" style="margin-bottom:8px"><i class="fas fa-random"></i>Transfer between accounts</div>
+          <p class="accounts-hint">Memindahkan saldo antar akun di dalam aplikasi (satu mata uang saja per pasangan). Tercatat sebagai dua baris dengan kategori "transfer". Butuh minimal dua akun.</p>
+          <div class="form-grid">
+            <div class="field-group">
+              <label>From</label>
+              <select id="transferFrom" class="select-field"></select>
+            </div>
+            <div class="field-group">
+              <label>To</label>
+              <select id="transferTo" class="select-field"></select>
+            </div>
+            <div class="field-group">
+              <label>Amount</label>
+              <input type="number" id="transferAmount" class="input-field" placeholder="0" step="0.01" min="0">
+            </div>
+            <div class="field-group">
+              <label>Date</label>
+              <input type="date" id="transferDate" class="input-field">
+            </div>
+            <div class="field-group" style="grid-column:1/-1">
+              <label>Description (optional)</label>
+              <input type="text" id="transferDesc" class="input-field" placeholder="e.g. Top up e-wallet">
+            </div>
+            <div class="field-group" style="justify-content:flex-end">
+              <label>&nbsp;</label>
+              <button type="button" class="btn btn-accent" onclick="createTransfer()">
+                <i class="fas fa-arrow-right"></i> Execute transfer
+              </button>
+            </div>
           </div>
         </div>
       </div>
