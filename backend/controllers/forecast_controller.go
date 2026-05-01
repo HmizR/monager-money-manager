@@ -60,16 +60,17 @@ func GetBalanceTrend(c *gin.Context) {
         }
     }
     
-    // Get daily balance trend
+    // Get daily balance trend per currency (exclude transfers)
     query := `
         SELECT 
+            COALESCE(currency_code, 'IDR') as currency_code,
             DATE(transaction_date) as date,
-            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as daily_income,
-            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as daily_expense
+            COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as daily_income,
+            COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as daily_expense
         FROM transactions
-        WHERE user_id = ? AND transaction_date BETWEEN ? AND ?
-        GROUP BY DATE(transaction_date)
-        ORDER BY date ASC`
+        WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
+        GROUP BY COALESCE(currency_code, 'IDR'), DATE(transaction_date)
+        ORDER BY currency_code ASC, date ASC`
     
     rows, err := database.DB.Query(query, userID, startDate, endDate)
     if err != nil {
@@ -78,33 +79,34 @@ func GetBalanceTrend(c *gin.Context) {
     }
     defer rows.Close()
     
-    var trends []BalanceTrend
-    runningBalance := 0.0
-    cumulativeIncome := 0.0
-    cumulativeExpense := 0.0
+    perCurrency := map[string][]BalanceTrend{}
+    runningBalance := map[string]float64{}
+    cumulativeIncome := map[string]float64{}
+    cumulativeExpense := map[string]float64{}
     
     for rows.Next() {
+        var code string
         var date time.Time
         var dailyIncome, dailyExpense float64
         
-        if err := rows.Scan(&date, &dailyIncome, &dailyExpense); err != nil {
+        if err := rows.Scan(&code, &date, &dailyIncome, &dailyExpense); err != nil {
             continue
         }
         
-        cumulativeIncome += dailyIncome
-        cumulativeExpense += dailyExpense
-        runningBalance = cumulativeIncome - cumulativeExpense
+        cumulativeIncome[code] += dailyIncome
+        cumulativeExpense[code] += dailyExpense
+        runningBalance[code] = cumulativeIncome[code] - cumulativeExpense[code]
         
-        trends = append(trends, BalanceTrend{
+        perCurrency[code] = append(perCurrency[code], BalanceTrend{
             Date:          date.Format("2006-01-02"),
-            Balance:       runningBalance,
-            CumulativeIncome:  cumulativeIncome,
-            CumulativeExpense: cumulativeExpense,
+            Balance:       runningBalance[code],
+            CumulativeIncome:  cumulativeIncome[code],
+            CumulativeExpense: cumulativeExpense[code],
         })
     }
     
     c.JSON(http.StatusOK, gin.H{
-        "trends": trends,
+        "per_currency": perCurrency,
         "start_date": startDate.Format("2006-01-02"),
         "end_date": endDate.Format("2006-01-02"),
     })
@@ -117,74 +119,6 @@ func GetBalanceForecast(c *gin.Context) {
     endDate := time.Now()
     startDate := endDate.AddDate(0, 0, -30)
     
-    // Calculate average daily income and expense
-    var totalIncome, totalExpense float64
-    var uniqueDays int
-    
-    incomeQuery := `
-        SELECT DATE(transaction_date), SUM(amount)
-        FROM transactions
-        WHERE user_id = ? AND type = 'income' AND transaction_date BETWEEN ? AND ?
-        GROUP BY DATE(transaction_date)`
-    
-    rows, err := database.DB.Query(incomeQuery, userID, startDate, endDate)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate income average"})
-        return
-    }
-    defer rows.Close()
-    
-    incomeDays := 0
-    for rows.Next() {
-        var date time.Time
-        var amount float64
-        if err := rows.Scan(&date, &amount); err == nil {
-            totalIncome += amount
-            incomeDays++
-        }
-    }
-    
-    expenseQuery := `
-        SELECT DATE(transaction_date), SUM(amount)
-        FROM transactions
-        WHERE user_id = ? AND type = 'expense' AND transaction_date BETWEEN ? AND ?
-        GROUP BY DATE(transaction_date)`
-    
-    rows, err = database.DB.Query(expenseQuery, userID, startDate, endDate)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate expense average"})
-        return
-    }
-    defer rows.Close()
-    
-    expenseDays := 0
-    for rows.Next() {
-        var date time.Time
-        var amount float64
-        if err := rows.Scan(&date, &amount); err == nil {
-            totalExpense += amount
-            expenseDays++
-        }
-    }
-    
-    // Get unique days count
-    uniqueDaysQuery := `SELECT COUNT(DISTINCT DATE(transaction_date)) FROM transactions WHERE user_id = ? AND transaction_date BETWEEN ? AND ?`
-    database.DB.QueryRow(uniqueDaysQuery, userID, startDate, endDate).Scan(&uniqueDays)
-    if uniqueDays == 0 {
-        uniqueDays = 1
-    }
-    
-    dailyAvgIncome := totalIncome / float64(uniqueDays)
-    dailyAvgExpense := totalExpense / float64(uniqueDays)
-    
-    // Get current balance
-    var currentBalance float64
-    balanceQuery := `
-        SELECT SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END)
-        FROM transactions
-        WHERE user_id = ? AND transaction_date <= ?`
-    database.DB.QueryRow(balanceQuery, userID, endDate).Scan(&currentBalance)
-    
     // Forecast for next 30 days
     forecastDays := 30
     if days := c.Query("days"); days != "" {
@@ -192,52 +126,143 @@ func GetBalanceForecast(c *gin.Context) {
             forecastDays = int(d.Hours() / 24)
         }
     }
-    
-    expectedIncome := dailyAvgIncome * float64(forecastDays)
-    expectedExpense := dailyAvgExpense * float64(forecastDays)
-    endingBalance := currentBalance + expectedIncome - expectedExpense
-    
-    // Generate recommendations based on forecast
-    recommendations := []string{}
-    if endingBalance < 0 {
-        recommendations = append(recommendations, 
-            "⚠️ Peringatan: Balance diperkirakan akan negatif dalam 30 hari. Pertimbangkan untuk mengurangi pengeluaran atau meningkatkan pendapatan.")
+
+    // Average per currency using last 30 days (exclude transfers).
+    avgQuery := `
+        SELECT 
+            COALESCE(currency_code, 'IDR') as currency_code,
+            COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as total_income,
+            COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as total_expense,
+            GREATEST(COUNT(DISTINCT DATE(transaction_date)), 1) as unique_days
+        FROM transactions
+        WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
+        GROUP BY COALESCE(currency_code, 'IDR')
+        ORDER BY currency_code ASC`
+
+    rows, err := database.DB.Query(avgQuery, userID, startDate, endDate)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate averages"})
+        return
+    }
+    defer rows.Close()
+
+    type avgRow struct {
+        code      string
+        incTotal  float64
+        expTotal  float64
+        uniqueDays int
+    }
+    avgs := []avgRow{}
+    for rows.Next() {
+        var r avgRow
+        if err := rows.Scan(&r.code, &r.incTotal, &r.expTotal, &r.uniqueDays); err == nil {
+            avgs = append(avgs, r)
+        }
+    }
+
+    // Current balance per currency (exclude transfers).
+    balanceQuery := `
+        SELECT 
+            COALESCE(currency_code, 'IDR') as currency_code,
+            COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) as balance
+        FROM transactions
+        WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date <= ?
+        GROUP BY COALESCE(currency_code, 'IDR')
+        ORDER BY currency_code ASC`
+    rows2, err := database.DB.Query(balanceQuery, userID, endDate)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate current balance"})
+        return
+    }
+    defer rows2.Close()
+
+    balances := map[string]float64{}
+    for rows2.Next() {
+        var code string
+        var bal float64
+        if err := rows2.Scan(&code, &bal); err == nil {
+            balances[code] = bal
+        }
     }
     
-    if expectedExpense > expectedIncome {
-        recommendations = append(recommendations,
-            "📉 Pengeluaran diperkirakan melebihi pendapatan. Buatlah rencana penghematan.")
+    perCurrency := map[string]BalanceForecast{}
+
+    // Build forecasts for currencies that appear in balance or last-30d window.
+    seen := map[string]bool{}
+    for _, r := range avgs {
+        seen[r.code] = true
     }
-    
-    if dailyAvgExpense > dailyAvgIncome*0.7 {
-        recommendations = append(recommendations,
-            "💡 Pengeluaran Anda cukup tinggi (70%+ dari pendapatan). Coba tingkatkan tabungan.")
+    for code := range balances {
+        seen[code] = true
     }
-    
-    if currentBalance < dailyAvgExpense*30 {
-        recommendations = append(recommendations,
-            "🏦 Dana darurat Anda hanya cukup untuk kurang dari 30 hari. Targetkan 3-6 bulan pengeluaran.")
+
+    for code := range seen {
+        // defaults
+        incTotal := 0.0
+        expTotal := 0.0
+        uniqueDays := 1
+        for _, r := range avgs {
+            if r.code == code {
+                incTotal = r.incTotal
+                expTotal = r.expTotal
+                uniqueDays = r.uniqueDays
+                if uniqueDays <= 0 {
+                    uniqueDays = 1
+                }
+                break
+            }
+        }
+
+        dailyAvgIncome := incTotal / float64(uniqueDays)
+        dailyAvgExpense := expTotal / float64(uniqueDays)
+        currentBalance := balances[code]
+
+        expectedIncome := dailyAvgIncome * float64(forecastDays)
+        expectedExpense := dailyAvgExpense * float64(forecastDays)
+        endingBalance := currentBalance + expectedIncome - expectedExpense
+
+        recommendations := []string{}
+        if endingBalance < 0 {
+            recommendations = append(recommendations,
+                "Peringatan: saldo diperkirakan akan negatif dalam 30 hari. Pertimbangkan untuk mengurangi pengeluaran atau meningkatkan pendapatan.")
+        }
+        if expectedExpense > expectedIncome {
+            recommendations = append(recommendations,
+                "Pengeluaran diperkirakan melebihi pendapatan. Buatlah rencana penghematan.")
+        }
+        if dailyAvgIncome > 0 && dailyAvgExpense > dailyAvgIncome*0.7 {
+            recommendations = append(recommendations,
+                "Pengeluaran Anda cukup tinggi (70%+ dari pendapatan). Coba tingkatkan tabungan.")
+        }
+        if currentBalance < dailyAvgExpense*30 {
+            recommendations = append(recommendations,
+                "Dana darurat Anda hanya cukup untuk kurang dari 30 hari. Targetkan 3-6 bulan pengeluaran.")
+        }
+        if len(recommendations) == 0 {
+            recommendations = append(recommendations,
+                "Keuangan Anda sehat! Pertahankan pola ini.",
+                "Pertimbangkan untuk berinvestasi 20% dari pendapatan.")
+        }
+
+        perCurrency[code] = BalanceForecast{
+            StartDate:           endDate.Format("2006-01-02"),
+            EndDate:             endDate.AddDate(0, 0, forecastDays).Format("2006-01-02"),
+            StartingBalance:     currentBalance,
+            ExpectedIncome:      expectedIncome,
+            ExpectedExpense:     expectedExpense,
+            EndingBalance:       endingBalance,
+            DailyAverageIncome:  dailyAvgIncome,
+            DailyAverageExpense: dailyAvgExpense,
+            Recommendations:     recommendations,
+        }
     }
-    
-    if len(recommendations) == 0 {
-        recommendations = append(recommendations,
-            "✅ Keuangan Anda sehat! Pertahankan pola ini.",
-            "🎯 Pertimbangkan untuk berinvestasi 20% dari pendapatan.")
-    }
-    
-    forecast := BalanceForecast{
-        StartDate:          endDate.Format("2006-01-02"),
-        EndDate:            endDate.AddDate(0, 0, forecastDays).Format("2006-01-02"),
-        StartingBalance:    currentBalance,
-        ExpectedIncome:     expectedIncome,
-        ExpectedExpense:    expectedExpense,
-        EndingBalance:      endingBalance,
-        DailyAverageIncome: dailyAvgIncome,
-        DailyAverageExpense: dailyAvgExpense,
-        Recommendations:    recommendations,
-    }
-    
-    c.JSON(http.StatusOK, forecast)
+
+    c.JSON(http.StatusOK, gin.H{
+        "start_date":   endDate.Format("2006-01-02"),
+        "end_date":     endDate.AddDate(0, 0, forecastDays).Format("2006-01-02"),
+        "days":         forecastDays,
+        "per_currency": perCurrency,
+    })
 }
 
 func GetMonthlyProjection(c *gin.Context) {
@@ -248,16 +273,34 @@ func GetMonthlyProjection(c *gin.Context) {
     currentMonth := now.Month()
     currentYear := now.Year()
     
-    // Get actual spending this month so far
-    var actualIncome, actualExpense float64
+    // Get actual spending this month so far per currency (exclude transfers)
     actualQuery := `
         SELECT 
-            SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
-            SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
+            COALESCE(currency_code, 'IDR') as currency_code,
+            COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as income,
+            COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as expense
         FROM transactions
-        WHERE user_id = ? AND MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?`
+        WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?
+        GROUP BY COALESCE(currency_code, 'IDR')
+        ORDER BY currency_code ASC`
     
-    database.DB.QueryRow(actualQuery, userID, currentMonth, currentYear).Scan(&actualIncome, &actualExpense)
+    rowsAct, err := database.DB.Query(actualQuery, userID, currentMonth, currentYear)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch actual totals"})
+        return
+    }
+    defer rowsAct.Close()
+
+    actualIncomeBy := map[string]float64{}
+    actualExpenseBy := map[string]float64{}
+    for rowsAct.Next() {
+        var code string
+        var inc, exp float64
+        if err := rowsAct.Scan(&code, &inc, &exp); err == nil {
+            actualIncomeBy[code] = inc
+            actualExpenseBy[code] = exp
+        }
+    }
     
     // Get budgeted amounts
     budgetQuery := `
@@ -290,40 +333,80 @@ func GetMonthlyProjection(c *gin.Context) {
     daysInMonth := time.Date(currentYear, currentMonth+1, 0, 0, 0, 0, 0, time.UTC).Day()
     currentDay := now.Day()
     remainingDays := daysInMonth - currentDay
-    
-    var projectedIncome, projectedExpense float64
-    if currentDay > 0 {
-        dailyAvgIncome := actualIncome / float64(currentDay)
-        dailyAvgExpense := actualExpense / float64(currentDay)
-        projectedIncome = actualIncome + (dailyAvgIncome * float64(remainingDays))
-        projectedExpense = actualExpense + (dailyAvgExpense * float64(remainingDays))
-    } else {
-        projectedIncome = actualIncome
-        projectedExpense = actualExpense
-    }
-    
-    // Get starting balance (end of last month)
-    var startingBalance float64
+
+    // Get starting balance (end of last month) per currency (exclude transfers)
     startQuery := `
-        SELECT SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END)
+        SELECT 
+            COALESCE(currency_code, 'IDR') as currency_code,
+            COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) as balance
         FROM transactions
-        WHERE user_id = ? AND transaction_date < ?`
+        WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date < ?
+        GROUP BY COALESCE(currency_code, 'IDR')
+        ORDER BY currency_code ASC`
     monthStart := time.Date(currentYear, currentMonth, 1, 0, 0, 0, 0, time.UTC)
-    database.DB.QueryRow(startQuery, userID, monthStart).Scan(&startingBalance)
-    
-    projection := map[string]interface{}{
-        "month":                currentMonth.String(),
-        "year":                 currentYear,
-        "starting_balance":     startingBalance,
-        "actual_income":        actualIncome,
-        "actual_expense":       actualExpense,
-        "projected_income":     projectedIncome,
-        "projected_expense":    projectedExpense,
-        "projected_ending_balance": startingBalance + projectedIncome - projectedExpense,
-        "budget_vs_actual":     totalBudget - actualExpense,
-        "days_remaining":       remainingDays,
-        "budgets":              budgets,
+    rowsStart, err := database.DB.Query(startQuery, userID, monthStart)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate starting balance"})
+        return
     }
-    
+    defer rowsStart.Close()
+
+    startingBy := map[string]float64{}
+    for rowsStart.Next() {
+        var code string
+        var bal float64
+        if err := rowsStart.Scan(&code, &bal); err == nil {
+            startingBy[code] = bal
+        }
+    }
+
+    // Union currencies
+    seen := map[string]bool{}
+    for code := range startingBy {
+        seen[code] = true
+    }
+    for code := range actualIncomeBy {
+        seen[code] = true
+    }
+    for code := range actualExpenseBy {
+        seen[code] = true
+    }
+
+    perCurrency := map[string]map[string]interface{}{}
+    for code := range seen {
+        actualIncome := actualIncomeBy[code]
+        actualExpense := actualExpenseBy[code]
+
+        projectedIncome := actualIncome
+        projectedExpense := actualExpense
+        if currentDay > 0 {
+            dailyAvgIncome := actualIncome / float64(currentDay)
+            dailyAvgExpense := actualExpense / float64(currentDay)
+            projectedIncome = actualIncome + (dailyAvgIncome * float64(remainingDays))
+            projectedExpense = actualExpense + (dailyAvgExpense * float64(remainingDays))
+        }
+
+        startingBalance := startingBy[code]
+
+        perCurrency[code] = map[string]interface{}{
+            "starting_balance":         startingBalance,
+            "actual_income":            actualIncome,
+            "actual_expense":           actualExpense,
+            "projected_income":         projectedIncome,
+            "projected_expense":        projectedExpense,
+            "projected_ending_balance": startingBalance + projectedIncome - projectedExpense,
+            // budgets table currently has no currency dimension; avoid misleading values.
+            "budget_vs_actual":         nil,
+        }
+    }
+
+    projection := map[string]interface{}{
+        "month":         currentMonth.String(),
+        "year":          currentYear,
+        "days_remaining": remainingDays,
+        "budgets":       budgets,
+        "per_currency":  perCurrency,
+    }
+
     c.JSON(http.StatusOK, projection)
 }
