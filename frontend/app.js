@@ -15,6 +15,14 @@ let currentCategoryContext = null;
 let allCategories     = [];
 /** @type {Array<{uuid:string,name:string,type:string,currency_code:string}>} */
 let accountsCache     = [];
+/** @type {string|null} */
+let activeCurrency    = null;
+/** @type {string[]} */
+let availableCurrencies = [];
+/** @type {any} */
+let lastStatsByCurrency = null;
+/** @type {Record<string, number>} */
+let lastBalanceByCurrency = {};
 
 // ── Utility: Toast notification ────────────────────────────────
 function toast(message, type = 'success') {
@@ -41,6 +49,33 @@ function formatMoney(amount, currencyCode = 'IDR') {
   } catch {
     return `${code} ${(Number(amount) || 0).toLocaleString('id-ID')}`;
   }
+}
+
+function pickDefaultCurrency(currencies) {
+  if (!currencies || !currencies.length) return 'IDR';
+  if (currencies.includes('IDR')) return 'IDR';
+  return currencies[0];
+}
+
+function renderCurrencyPills() {
+  const wrap = document.getElementById('currencyPills');
+  if (!wrap) return;
+  if (!availableCurrencies || availableCurrencies.length <= 1) {
+    wrap.innerHTML = '';
+    return;
+  }
+
+  wrap.innerHTML = availableCurrencies.map(code => {
+    const isActive = code === activeCurrency;
+    return `<button class="currency-pill ${isActive ? 'active' : ''}" type="button" onclick="setActiveCurrency('${code}')">${code}</button>`;
+  }).join('');
+}
+
+function setActiveCurrency(code) {
+  activeCurrency = (code || '').toUpperCase();
+  renderCurrencyPills();
+  // Refresh dashboard pieces that depend on currency
+  loadDashboard();
 }
 
 function accountDisplayName(uuid) {
@@ -383,18 +418,30 @@ async function loadDashboard() {
 
     // Stats with range
     const statsRes  = await fetch(`${API_URL}/statistics?range=${globalRange}`, { credentials: 'include' });
-    const stats     = await statsRes.json();
-    const net = (stats.total_income || 0) - (stats.total_expense || 0);
-    const netClass  = net >= 0 ? 'netchange' : 'expense';
+    const statsPayload = await statsRes.json();
+    lastStatsByCurrency = statsPayload?.per_currency || {};
+    availableCurrencies = Object.keys(lastStatsByCurrency || {}).sort();
+    if (!activeCurrency) activeCurrency = pickDefaultCurrency(availableCurrencies);
+    if (availableCurrencies.length && !availableCurrencies.includes(activeCurrency)) {
+      activeCurrency = pickDefaultCurrency(availableCurrencies);
+    }
+    renderCurrencyPills();
 
-    document.getElementById('statIncome').textContent  = `Rp ${(stats.total_income || 0).toLocaleString()}`;
-    document.getElementById('statExpense').textContent = `Rp ${(stats.total_expense || 0).toLocaleString()}`;
-    document.getElementById('statNet').textContent     = `Rp ${net.toLocaleString()}`;
+    const stats = (lastStatsByCurrency && activeCurrency) ? lastStatsByCurrency[activeCurrency] : null;
+    const totalIncome = stats?.total_income || 0;
+    const totalExpense = stats?.total_expense || 0;
+    const net = (stats?.balance != null) ? stats.balance : (totalIncome - totalExpense);
+
+    document.getElementById('statIncome').textContent  = formatMoney(totalIncome, activeCurrency || 'IDR');
+    document.getElementById('statExpense').textContent = formatMoney(totalExpense, activeCurrency || 'IDR');
+    document.getElementById('statNet').textContent     = formatMoney(net, activeCurrency || 'IDR');
 
     // Current balance
     const balRes  = await fetch(`${API_URL}/balance/current`, { credentials: 'include' });
     const balData = await balRes.json();
-    document.getElementById('currentBalance').textContent = `Rp ${(balData.balance || 0).toLocaleString()}`;
+    lastBalanceByCurrency = balData?.per_currency || {};
+    const bal = (activeCurrency && lastBalanceByCurrency) ? (lastBalanceByCurrency[activeCurrency] || 0) : 0;
+    document.getElementById('currentBalance').textContent = formatMoney(bal, activeCurrency || 'IDR');
 
     await loadTrendChart();
     await loadCategoryChart();
@@ -414,24 +461,27 @@ async function loadTrendChart() {
   try {
     const res  = await fetch(`${API_URL}/charts?type=trend&range=${globalRange}`, { credentials: 'include' });
     const data = await res.json();
+    const per = data?.per_currency || {};
+    const picked = (activeCurrency && per[activeCurrency]) ? per[activeCurrency] : per[pickDefaultCurrency(Object.keys(per || {}).sort())];
+    if (!picked) return;
     if (trendChart) trendChart.destroy();
     const ctx = document.getElementById('trendChart').getContext('2d');
     trendChart = new Chart(ctx, {
       type: 'line',
       data: {
-        labels: data.months.map(d => d.split('T')[0]),
+        labels: picked.months.map(d => String(d).split('T')[0]),
         datasets: [
-          { label: 'Income',  data: data.income,  borderColor: '#00e5a0', backgroundColor: 'rgba(0,229,160,0.08)', fill: true, tension: 0.4, pointRadius: 3 },
-          { label: 'Expense', data: data.expense, borderColor: '#ff5370', backgroundColor: 'rgba(255,83,112,0.08)', fill: true, tension: 0.4, pointRadius: 3 }
+          { label: 'Income',  data: picked.income,  borderColor: '#00e5a0', backgroundColor: 'rgba(0,229,160,0.08)', fill: true, tension: 0.4, pointRadius: 3 },
+          { label: 'Expense', data: picked.expense, borderColor: '#ff5370', backgroundColor: 'rgba(255,83,112,0.08)', fill: true, tension: 0.4, pointRadius: 3 }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: Rp ${ctx.parsed.y.toLocaleString()}` } } },
+        plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${formatMoney(ctx.parsed.y, activeCurrency || 'IDR')}` } } },
         scales: {
           x: { ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 30 }, grid: { color: 'rgba(255,255,255,0.04)' } },
-          y: { ticks: { color: '#64748b', callback: v => 'Rp ' + (v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v.toLocaleString()) }, grid: { color: 'rgba(255,255,255,0.04)' } }
+          y: { ticks: { color: '#64748b', callback: v => formatMoney(v, activeCurrency || 'IDR') }, grid: { color: 'rgba(255,255,255,0.04)' } }
         }
       }
     });
@@ -442,13 +492,16 @@ async function loadCategoryChart() {
   try {
     const res  = await fetch(`${API_URL}/charts?type=category&range=${globalRange}`, { credentials: 'include' });
     const data = await res.json();
+    const per = data?.per_currency || {};
+    const picked = (activeCurrency && per[activeCurrency]) ? per[activeCurrency] : per[pickDefaultCurrency(Object.keys(per || {}).sort())];
+    if (!picked) return;
     if (categoryChart) categoryChart.destroy();
     const ctx = document.getElementById('categoryChart').getContext('2d');
     categoryChart = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: data.labels,
-        datasets: [{ data: data.data, backgroundColor: ['#00e5a0','#60a5fa','#f59e0b','#ff5370','#a78bfa','#fb923c','#34d399','#f472b6'], borderWidth: 0, hoverOffset: 8 }]
+        labels: picked.labels,
+        datasets: [{ data: picked.data, backgroundColor: ['#00e5a0','#60a5fa','#f59e0b','#ff5370','#a78bfa','#fb923c','#34d399','#f472b6'], borderWidth: 0, hoverOffset: 8 }]
       },
       options: {
         responsive: true,
@@ -457,7 +510,7 @@ async function loadCategoryChart() {
         plugins: {
           ...chartDefaults.plugins,
           legend: { position: 'bottom', labels: { color: '#94a3b8', font: { family: 'DM Sans', size: 12 }, padding: 12, boxWidth: 12 } },
-          tooltip: { callbacks: { label: ctx => `${ctx.label}: Rp ${ctx.parsed.toLocaleString()}` } }
+          tooltip: { callbacks: { label: ctx => `${ctx.label}: ${formatMoney(ctx.parsed, activeCurrency || 'IDR')}` } }
         }
       }
     });
@@ -468,26 +521,28 @@ async function loadBalanceTrend() {
   try {
     const res  = await fetch(`${API_URL}/balance/trend?range=${globalRange}`, { credentials: 'include' });
     const data = await res.json();
+    const per = data?.per_currency || {};
+    const picked = (activeCurrency && per[activeCurrency]) ? per[activeCurrency] : per[pickDefaultCurrency(Object.keys(per || {}).sort())] || [];
     if (balanceTrendChart) balanceTrendChart.destroy();
     const ctx = document.getElementById('balanceTrendChart').getContext('2d');
     balanceTrendChart = new Chart(ctx, {
       type: 'line',
       data: {
-        labels: data.trends.map(t => t.date),
+        labels: picked.map(t => t.date),
         datasets: [
-          { label: 'Balance',            data: data.trends.map(t => t.balance),            borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.08)', fill: true, tension: 0.4, borderWidth: 2.5 },
-          { label: 'Cumulative Income',  data: data.trends.map(t => t.cumulative_income),  borderColor: '#00e5a0', fill: false, borderDash: [5,5], borderWidth: 1.5, pointRadius: 0 },
-          { label: 'Cumulative Expense', data: data.trends.map(t => t.cumulative_expense), borderColor: '#ff5370', fill: false, borderDash: [5,5], borderWidth: 1.5, pointRadius: 0 }
+          { label: 'Balance',            data: picked.map(t => t.balance),            borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.08)', fill: true, tension: 0.4, borderWidth: 2.5 },
+          { label: 'Cumulative Income',  data: picked.map(t => t.cumulative_income),  borderColor: '#00e5a0', fill: false, borderDash: [5,5], borderWidth: 1.5, pointRadius: 0 },
+          { label: 'Cumulative Expense', data: picked.map(t => t.cumulative_expense), borderColor: '#ff5370', fill: false, borderDash: [5,5], borderWidth: 1.5, pointRadius: 0 }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: Rp ${ctx.parsed.y.toLocaleString()}` } } },
+        plugins: { ...chartDefaults.plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${formatMoney(ctx.parsed.y, activeCurrency || 'IDR')}` } } },
         scales: {
           x: { ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 30 }, grid: { color: 'rgba(255,255,255,0.04)' } },
-          y: { ticks: { color: '#64748b', callback: v => 'Rp ' + (v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v.toLocaleString()) }, grid: { color: 'rgba(255,255,255,0.04)' } }
+          y: { ticks: { color: '#64748b', callback: v => formatMoney(v, activeCurrency || 'IDR') }, grid: { color: 'rgba(255,255,255,0.04)' } }
         }
       }
     });
@@ -498,39 +553,46 @@ async function loadBalanceTrend() {
 async function loadBalanceForecast() {
   try {
     const res      = await fetch(`${API_URL}/balance/forecast`, { credentials: 'include' });
-    const forecast = await res.json();
+    const payload = await res.json();
+    const per = payload?.per_currency || {};
+    const picked = (activeCurrency && per[activeCurrency]) ? per[activeCurrency] : per[pickDefaultCurrency(Object.keys(per || {}).sort())];
+    if (!picked) {
+      document.getElementById('forecastCards').innerHTML = '<div class="empty-state"><i class="fas fa-binoculars"></i><p>Belum ada data forecast</p></div>';
+      document.getElementById('forecastRecommendations').innerHTML = '';
+      return;
+    }
 
     document.getElementById('forecastCards').innerHTML = `
       <div class="forecast-grid">
         <div class="stat-card balance">
           <div class="stat-icon"><i class="fas fa-wallet"></i></div>
           <div class="stat-label">Starting Balance</div>
-          <div class="stat-value">Rp ${(forecast.starting_balance||0).toLocaleString()}</div>
-          <div class="stat-sub">as of ${forecast.start_date||''}</div>
+          <div class="stat-value">${formatMoney(picked.starting_balance||0, activeCurrency || 'IDR')}</div>
+          <div class="stat-sub">as of ${picked.start_date||payload.start_date||''}</div>
         </div>
         <div class="stat-card income">
           <div class="stat-icon"><i class="fas fa-arrow-trend-up"></i></div>
           <div class="stat-label">Expected Income (30d)</div>
-          <div class="stat-value">Rp ${(forecast.expected_income||0).toLocaleString()}</div>
-          <div class="stat-sub">Rp ${(forecast.daily_average_income||0).toLocaleString()}/day avg</div>
+          <div class="stat-value">${formatMoney(picked.expected_income||0, activeCurrency || 'IDR')}</div>
+          <div class="stat-sub">${formatMoney(picked.daily_average_income||0, activeCurrency || 'IDR')}/day avg</div>
         </div>
         <div class="stat-card expense">
           <div class="stat-icon"><i class="fas fa-arrow-trend-down"></i></div>
           <div class="stat-label">Expected Expense (30d)</div>
-          <div class="stat-value">Rp ${(forecast.expected_expense||0).toLocaleString()}</div>
-          <div class="stat-sub">Rp ${(forecast.daily_average_expense||0).toLocaleString()}/day avg</div>
+          <div class="stat-value">${formatMoney(picked.expected_expense||0, activeCurrency || 'IDR')}</div>
+          <div class="stat-sub">${formatMoney(picked.daily_average_expense||0, activeCurrency || 'IDR')}/day avg</div>
         </div>
-        <div class="stat-card ${forecast.ending_balance >= 0 ? 'balance' : 'expense'}">
+        <div class="stat-card ${(picked.ending_balance||0) >= 0 ? 'balance' : 'expense'}">
           <div class="stat-icon"><i class="fas fa-flag-checkered"></i></div>
           <div class="stat-label">Ending Balance Forecast</div>
-          <div class="stat-value">Rp ${(forecast.ending_balance||0).toLocaleString()}</div>
-          <div class="stat-sub">by ${forecast.end_date||''}</div>
+          <div class="stat-value">${formatMoney(picked.ending_balance||0, activeCurrency || 'IDR')}</div>
+          <div class="stat-sub">by ${picked.end_date||payload.end_date||''}</div>
         </div>
       </div>
     `;
 
-    const recsHtml = forecast.recommendations?.length
-      ? forecast.recommendations.map(r => `<div class="rec-item"><i class="fas fa-chart-line"></i><span>${r}</span></div>`).join('')
+    const recsHtml = picked.recommendations?.length
+      ? picked.recommendations.map(r => `<div class="rec-item"><i class="fas fa-chart-line"></i><span>${escapeHtml(r)}</span></div>`).join('')
       : `<div class="empty-state"><i class="fas fa-check-circle" style="color:var(--accent)"></i><p>No recommendations at this time</p></div>`;
     document.getElementById('forecastRecommendations').innerHTML = recsHtml;
   } catch (err) { console.error(err); }
@@ -540,51 +602,51 @@ async function loadBalanceForecast() {
 async function loadMonthlyProjection() {
   try {
     const res        = await fetch(`${API_URL}/balance/projection`, { credentials: 'include' });
-    const projection = await res.json();
-    const endBal     = projection.projected_ending_balance || 0;
+    const payload = await res.json();
+    const per = payload?.per_currency || {};
+    const picked = (activeCurrency && per[activeCurrency]) ? per[activeCurrency] : per[pickDefaultCurrency(Object.keys(per || {}).sort())];
+    if (!picked) {
+      document.getElementById('monthlyProjection').innerHTML = '<div class="empty-state"><i class="fas fa-chart-bar"></i><p>Belum ada data projection</p></div>';
+      return;
+    }
+    const endBal     = picked.projected_ending_balance || 0;
     const isPos      = endBal >= 0;
-    const incomeGrowth = projection.actual_income
-      ? (((projection.projected_income - projection.actual_income) / projection.actual_income) * 100).toFixed(1)
+    const incomeGrowth = picked.actual_income
+      ? (((picked.projected_income - picked.actual_income) / picked.actual_income) * 100).toFixed(1)
       : '0.0';
 
     const html = `
       <div class="projection-grid">
         <div class="projection-cell">
           <div class="pcell-label">Month</div>
-          <div class="pcell-value">${projection.month} ${projection.year}</div>
-          <div class="pcell-sub">${projection.days_remaining} days remaining</div>
+          <div class="pcell-value">${payload.month} ${payload.year}</div>
+          <div class="pcell-sub">${payload.days_remaining} days remaining</div>
         </div>
         <div class="projection-cell">
           <div class="pcell-label">Starting Balance</div>
-          <div class="pcell-value">Rp ${(projection.starting_balance||0).toLocaleString()}</div>
+          <div class="pcell-value">${formatMoney(picked.starting_balance||0, activeCurrency || 'IDR')}</div>
         </div>
         <div class="projection-cell">
           <div class="pcell-label">Actual / Projected Income</div>
-          <div class="pcell-value" style="color:var(--accent)">Rp ${(projection.projected_income||0).toLocaleString()}</div>
-          <div class="pcell-sub">Actual: Rp ${(projection.actual_income||0).toLocaleString()} &nbsp;·&nbsp; Growth: ${incomeGrowth}%</div>
+          <div class="pcell-value" style="color:var(--accent)">${formatMoney(picked.projected_income||0, activeCurrency || 'IDR')}</div>
+          <div class="pcell-sub">Actual: ${formatMoney(picked.actual_income||0, activeCurrency || 'IDR')} &nbsp;·&nbsp; Growth: ${incomeGrowth}%</div>
         </div>
         <div class="projection-cell">
           <div class="pcell-label">Actual / Projected Expense</div>
-          <div class="pcell-value" style="color:var(--red)">Rp ${(projection.projected_expense||0).toLocaleString()}</div>
-          <div class="pcell-sub">Actual: Rp ${(projection.actual_expense||0).toLocaleString()}</div>
-        </div>
-        <div class="projection-cell">
-          <div class="pcell-label">Budget vs Actual</div>
-          <div class="pcell-value" style="color:${(projection.budget_vs_actual||0)>=0?'var(--accent)':'var(--red)'}">
-            Rp ${(projection.budget_vs_actual||0).toLocaleString()}
-          </div>
+          <div class="pcell-value" style="color:var(--red)">${formatMoney(picked.projected_expense||0, activeCurrency || 'IDR')}</div>
+          <div class="pcell-sub">Actual: ${formatMoney(picked.actual_expense||0, activeCurrency || 'IDR')}</div>
         </div>
         <div class="projection-cell ${isPos ? 'highlight-pos' : 'highlight-neg'}">
           <div class="pcell-label">Projected Ending Balance</div>
           <div class="pcell-value" style="font-size:22px; color:${isPos?'var(--accent)':'var(--red)'}">
-            Rp ${endBal.toLocaleString()}
+            ${formatMoney(endBal, activeCurrency || 'IDR')}
           </div>
         </div>
       </div>
-      ${projection.budgets?.length ? `
+      ${payload.budgets?.length ? `
         <div style="margin-top:16px">
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Budget Categories</div>
-          <div>${projection.budgets.map(b => `<span class="budget-tag">${b.category}: Rp ${(b.budget||0).toLocaleString()}</span>`).join('')}</div>
+          <div>${payload.budgets.map(b => `<span class="budget-tag">${escapeHtml(b.category)}: ${formatMoney(b.budget||0, activeCurrency || 'IDR')}</span>`).join('')}</div>
         </div>` : ''}
     `;
     document.getElementById('monthlyProjection').innerHTML = html;

@@ -455,6 +455,32 @@ body {
 .balance-hero-value { font-family: 'Sora', sans-serif; font-size: 40px; font-weight: 800; color: #fff; letter-spacing: -1px; }
 .balance-hero-sub { font-size: 13px; color: rgba(255,255,255,0.4); margin-top: 4px; }
 
+/* ── Currency pills ─────────────────────────────────────────── */
+.currency-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.currency-pill {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text-soft);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+.currency-pill:hover { border-color: rgba(0,229,160,0.25); color: var(--text); }
+.currency-pill.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-glow);
+  color: var(--accent);
+}
+
 /* ── Range filter ───────────────────────────────────────────── */
 .range-group {
   display: flex;
