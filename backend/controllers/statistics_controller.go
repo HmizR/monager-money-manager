@@ -26,13 +26,30 @@ type MonthlyData struct {
 func GetCurrentBalance(c *gin.Context) {
 	userID := c.GetInt("userID")
 
-	var balance float64
-	query := `SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) 
-              FROM transactions WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL)`
+	query := `SELECT COALESCE(currency_code, 'IDR') as currency_code,
+	                 COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) as balance
+	          FROM transactions
+	          WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL)
+	          GROUP BY COALESCE(currency_code, 'IDR')
+	          ORDER BY currency_code ASC`
 
-	database.DB.QueryRow(query, userID).Scan(&balance)
+	rows, err := database.DB.Query(query, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate balance"})
+		return
+	}
+	defer rows.Close()
 
-	c.JSON(http.StatusOK, gin.H{"balance": balance})
+	perCurrency := map[string]float64{}
+	for rows.Next() {
+		var code string
+		var bal float64
+		if err := rows.Scan(&code, &bal); err == nil {
+			perCurrency[code] = bal
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"per_currency": perCurrency})
 }
 
 func GetStatistics(c *gin.Context) {
@@ -71,72 +88,108 @@ func GetStatistics(c *gin.Context) {
 		}
 	}
 
-	stats := Statistics{
-		CategorySpending: make(map[string]float64),
-		MonthlyTrend:     []MonthlyData{},
-	}
+	// per_currency response
+	perCurrency := map[string]*Statistics{}
 
-	// Get total income and expense
-	query := `SELECT 
-                SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income,
-                SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expense
-              FROM transactions 
-              WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?`
+	// Totals grouped by currency
+	totalsQuery := `SELECT 
+	                  COALESCE(currency_code, 'IDR') as currency_code,
+	                  COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as total_income,
+	                  COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as total_expense
+	                FROM transactions
+	                WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
+	                GROUP BY COALESCE(currency_code, 'IDR')
+	                ORDER BY currency_code ASC`
 
-	err := database.DB.QueryRow(query, userID, startDate, endDate).Scan(&stats.TotalIncome, &stats.TotalExpense)
-	if err != nil && err != sql.ErrNoRows {
+	rows, err := database.DB.Query(totalsQuery, userID, startDate, endDate)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate totals"})
 		return
 	}
+	defer rows.Close()
 
-	stats.Balance = stats.TotalIncome - stats.TotalExpense
+	for rows.Next() {
+		var code string
+		var inc, exp float64
+		if err := rows.Scan(&code, &inc, &exp); err != nil && err != sql.ErrNoRows {
+			continue
+		}
+		perCurrency[code] = &Statistics{
+			TotalIncome:      inc,
+			TotalExpense:     exp,
+			Balance:          inc - exp,
+			CategorySpending: map[string]float64{},
+			MonthlyTrend:     []MonthlyData{},
+		}
+	}
 
-	// Get category spending
-	categoryQuery := `SELECT category, SUM(amount) as total 
-                      FROM transactions 
-                      WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND type = 'expense' AND transaction_date BETWEEN ? AND ?
-                      GROUP BY category`
+	// Category spending grouped by currency+category
+	categoryQuery := `SELECT COALESCE(currency_code, 'IDR') as currency_code, category, COALESCE(SUM(amount), 0) as total
+	                  FROM transactions
+	                  WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND type = 'expense' AND transaction_date BETWEEN ? AND ?
+	                  GROUP BY COALESCE(currency_code, 'IDR'), category
+	                  ORDER BY currency_code ASC, total DESC`
 
-	rows, err := database.DB.Query(categoryQuery, userID, startDate, endDate)
+	rows2, err := database.DB.Query(categoryQuery, userID, startDate, endDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get category data"})
 		return
 	}
-	defer rows.Close()
+	defer rows2.Close()
 
-	for rows.Next() {
-		var category string
+	for rows2.Next() {
+		var code, category string
 		var total float64
-		if err := rows.Scan(&category, &total); err == nil {
-			stats.CategorySpending[category] = total
+		if err := rows2.Scan(&code, &category, &total); err == nil {
+			s, ok := perCurrency[code]
+			if !ok {
+				s = &Statistics{CategorySpending: map[string]float64{}, MonthlyTrend: []MonthlyData{}}
+				perCurrency[code] = s
+			}
+			if s.CategorySpending == nil {
+				s.CategorySpending = map[string]float64{}
+			}
+			s.CategorySpending[category] = total
 		}
 	}
 
-	// Get monthly trend
+	// Monthly trend grouped by currency+month
 	monthlyQuery := `SELECT 
-                        DATE_FORMAT(transaction_date, '%Y-%m') as month,
-                        SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
-                        SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
-                     FROM transactions 
-                     WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
-                     GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
-                     ORDER BY month ASC`
+	                   COALESCE(currency_code, 'IDR') as currency_code,
+	                   DATE_FORMAT(transaction_date, '%Y-%m') as month,
+	                   COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as income,
+	                   COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as expense
+	                 FROM transactions 
+	                 WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
+	                 GROUP BY COALESCE(currency_code, 'IDR'), DATE_FORMAT(transaction_date, '%Y-%m')
+	                 ORDER BY currency_code ASC, month ASC`
 
-	rows, err = database.DB.Query(monthlyQuery, userID, startDate, endDate)
+	rows3, err := database.DB.Query(monthlyQuery, userID, startDate, endDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get monthly data"})
 		return
 	}
-	defer rows.Close()
+	defer rows3.Close()
 
-	for rows.Next() {
-		var monthData MonthlyData
-		if err := rows.Scan(&monthData.Month, &monthData.Income, &monthData.Expense); err == nil {
-			stats.MonthlyTrend = append(stats.MonthlyTrend, monthData)
+	for rows3.Next() {
+		var code string
+		var md MonthlyData
+		if err := rows3.Scan(&code, &md.Month, &md.Income, &md.Expense); err == nil {
+			s, ok := perCurrency[code]
+			if !ok {
+				s = &Statistics{CategorySpending: map[string]float64{}, MonthlyTrend: []MonthlyData{}}
+				perCurrency[code] = s
+			}
+			s.MonthlyTrend = append(s.MonthlyTrend, md)
 		}
 	}
 
-	c.JSON(http.StatusOK, stats)
+	c.JSON(http.StatusOK, gin.H{
+		"per_currency": perCurrency,
+		"start_date":   startDate.Format("2006-01-02"),
+		"end_date":     endDate.Format("2006-01-02"),
+		"range":        rangeType,
+	})
 }
 
 // In GetChartData function
@@ -157,7 +210,7 @@ func GetChartData(c *gin.Context) {
 
 func getCategoryChartData(c *gin.Context, userID int, rangeType string) {
 	endDate := time.Now()
-	var startDate time.Time // VARIABLE INI TIDAK DIGUNAKAN - HAPUS ATAU GUNAKAN
+	var startDate time.Time
 
 	switch rangeType {
 	case "7D":
@@ -174,10 +227,11 @@ func getCategoryChartData(c *gin.Context, userID int, rangeType string) {
 		startDate = endDate.AddDate(0, 0, -30)
 	}
 
-	query := `SELECT category, SUM(amount) as total 
+	query := `SELECT COALESCE(currency_code, 'IDR') as currency_code, category, COALESCE(SUM(amount), 0) as total 
               FROM transactions 
               WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND type = 'expense' AND transaction_date BETWEEN ? AND ?
-              GROUP BY category`
+              GROUP BY COALESCE(currency_code, 'IDR'), category
+              ORDER BY currency_code ASC, total DESC`
 
 	rows, err := database.DB.Query(query, userID, startDate, endDate)
 	if err != nil {
@@ -186,27 +240,29 @@ func getCategoryChartData(c *gin.Context, userID int, rangeType string) {
 	}
 	defer rows.Close()
 
-	labels := []string{}
-	data := []float64{}
+	perCurrency := map[string]gin.H{}
+	labelsBy := map[string][]string{}
+	dataBy := map[string][]float64{}
 
 	for rows.Next() {
-		var category string
+		var code, category string
 		var total float64
-		if err := rows.Scan(&category, &total); err == nil {
-			labels = append(labels, category)
-			data = append(data, total)
+		if err := rows.Scan(&code, &category, &total); err == nil {
+			labelsBy[code] = append(labelsBy[code], category)
+			dataBy[code] = append(dataBy[code], total)
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"labels": labels,
-		"data":   data,
-	})
+	for code, labels := range labelsBy {
+		perCurrency[code] = gin.H{"labels": labels, "data": dataBy[code]}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"per_currency": perCurrency})
 }
 
 func getTrendChartDataWithRange(c *gin.Context, userID int, rangeType string) {
 	endDate := time.Now()
-	var startDate time.Time // VARIABLE INI TIDAK DIGUNAKAN - HAPUS ATAU GUNAKAN
+	var startDate time.Time
 
 	switch rangeType {
 	case "7D":
@@ -223,35 +279,32 @@ func getTrendChartDataWithRange(c *gin.Context, userID int, rangeType string) {
 		startDate = endDate.AddDate(0, 0, -30)
 	}
 
-	var query string // VARIABLE INI JUGA TIDAK DIGUNAKAN
-
-	// Jika query tidak pernah digunakan, hapus deklarasi ini
-	// Atau gunakan query tersebut untuk database query
-
-	// Contoh jika ingin menggunakan query:
+	var query string
 	var rows *sql.Rows
 	var err error
 
 	if rangeType == "7D" || rangeType == "30D" || rangeType == "12W" {
 		query = `SELECT 
+		            COALESCE(currency_code, 'IDR') as currency_code,
                     DATE(transaction_date) as period,
-                    SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
-                    SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
+                    COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as income,
+                    COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as expense
                  FROM transactions 
                  WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
-                 GROUP BY DATE(transaction_date)
-                 ORDER BY period ASC`
+                 GROUP BY COALESCE(currency_code, 'IDR'), DATE(transaction_date)
+                 ORDER BY currency_code ASC, period ASC`
 
 		rows, err = database.DB.Query(query, userID, startDate, endDate)
 	} else {
 		query = `SELECT 
+		            COALESCE(currency_code, 'IDR') as currency_code,
                     DATE_FORMAT(transaction_date, '%Y-%m') as period,
-                    SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as income,
-                    SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as expense
+                    COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as income,
+                    COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as expense
                  FROM transactions 
                  WHERE user_id = ? AND (is_transfer = FALSE OR is_transfer IS NULL) AND transaction_date BETWEEN ? AND ?
-                 GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
-                 ORDER BY period ASC`
+                 GROUP BY COALESCE(currency_code, 'IDR'), DATE_FORMAT(transaction_date, '%Y-%m')
+                 ORDER BY currency_code ASC, period ASC`
 
 		rows, err = database.DB.Query(query, userID, startDate, endDate)
 	}
@@ -262,23 +315,28 @@ func getTrendChartDataWithRange(c *gin.Context, userID int, rangeType string) {
 	}
 	defer rows.Close()
 
-	periods := []string{}
-	incomeData := []float64{}
-	expenseData := []float64{}
+	periodsBy := map[string][]string{}
+	incomeBy := map[string][]float64{}
+	expenseBy := map[string][]float64{}
 
 	for rows.Next() {
-		var period string
+		var code, period string
 		var income, expense float64
-		if err := rows.Scan(&period, &income, &expense); err == nil {
-			periods = append(periods, period)
-			incomeData = append(incomeData, income)
-			expenseData = append(expenseData, expense)
+		if err := rows.Scan(&code, &period, &income, &expense); err == nil {
+			periodsBy[code] = append(periodsBy[code], period)
+			incomeBy[code] = append(incomeBy[code], income)
+			expenseBy[code] = append(expenseBy[code], expense)
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"months":  periods,
-		"income":  incomeData,
-		"expense": expenseData,
-	})
+	perCurrency := map[string]gin.H{}
+	for code, periods := range periodsBy {
+		perCurrency[code] = gin.H{
+			"months":  periods,
+			"income":  incomeBy[code],
+			"expense": expenseBy[code],
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"per_currency": perCurrency})
 }
